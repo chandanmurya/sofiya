@@ -1,110 +1,123 @@
 // ============================================
-// Razorpay Webhook Handler
-// Receives callbacks for subscription events, payments, invoices
+// Razorpay Webhook Endpoint
 // ============================================
+// POST /api/webhooks/razorpay
+//
+// STRICT verification:
+// 1. Require x-razorpay-signature header
+// 2. HMAC-SHA256 verify against RAZORPAY_WEBHOOK_SECRET
+// 3. Idempotent processing via EventDedup table
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyRazorpayWebhook, processRazorpayWebhook } from '@/lib/razorpay/webhook';
-import { prisma } from '@/lib/prisma';
+import { verifyWebhookSignature } from '@/lib/billing/razorpay';
+import { handleRazorpayWebhook } from '@/lib/billing/webhook-handler';
 
 export async function POST(req: NextRequest) {
+  // ── Step 1: Read raw body ──
+  const rawBody = await req.text();
+
+  // ── Step 2: Get signature header ──
+  const signature = req.headers.get('x-razorpay-signature');
+
+  if (!signature) {
+    console.warn('[Razorpay Webhook] Missing x-razorpay-signature header');
+    return NextResponse.json(
+      { error: 'Missing signature header' },
+      { status: 401 }
+    );
+  }
+
+  // ── Step 3: Verify signature (STRICT - timing-safe) ──
+  const isValid = verifyWebhookSignature(rawBody, signature);
+
+  if (!isValid) {
+    console.warn('[Razorpay Webhook] Signature verification FAILED');
+    return NextResponse.json(
+      { error: 'Invalid signature' },
+      { status: 401 }
+    );
+  }
+
+  // ── Step 4: Parse payload ──
+  let event: any;
   try {
-    // Read raw body for signature verification
-    const rawBody = await req.text();
+    event = JSON.parse(rawBody);
+  } catch {
+    return NextResponse.json(
+      { error: 'Invalid JSON' },
+      { status: 400 }
+    );
+  }
 
-    // Get Razorpay signature header
-    const signature = req.headers.get('x-razorpay-signature');
+  // ── Step 5: Extract event ID for idempotency ──
+  // Razorpay sends a unique event ID in the payload
+  const eventId = extractEventId(event, req);
 
-    if (!signature) {
-      console.warn('Razorpay webhook missing signature header');
-      return NextResponse.json(
-        { error: 'Missing signature' },
-        { status: 401 }
-      );
-    }
+  if (!eventId) {
+    console.warn('[Razorpay Webhook] Could not extract event ID');
+    return NextResponse.json(
+      { error: 'Missing event identifier' },
+      { status: 400 }
+    );
+  }
 
-    // Verify webhook authenticity
-    const isValid = verifyRazorpayWebhook(rawBody, signature);
-    if (!isValid) {
-      console.warn('Razorpay webhook verification failed');
-      return NextResponse.json(
-        { error: 'Invalid webhook signature' },
-        { status: 401 }
-      );
-    }
+  // ── Step 6: Process (idempotent) ──
+  try {
+    const result = await handleRazorpayWebhook(event, eventId);
 
-    // Parse the event
-    let event: any;
-    try {
-      event = JSON.parse(rawBody);
-    } catch {
-      return NextResponse.json(
-        { error: 'Invalid JSON payload' },
-        { status: 400 }
-      );
-    }
-
-    // Idempotency: Check if this event was already processed
-    const eventId = event.event_id || event.id;
-    if (eventId) {
-      const existing = await prisma.webhookLog.findFirst({
-        where: {
-          source: 'razorpay',
-          status: 'processed',
-          payload: { path: ['event_id'], equals: eventId },
-        },
-      });
-
-      if (existing) {
-        return NextResponse.json({ received: true, duplicate: true });
-      }
-    }
-
-    // Log the webhook
-    const log = await prisma.webhookLog.create({
-      data: {
-        source: 'razorpay',
-        eventType: event.event || 'unknown',
-        payload: { ...event, event_id: eventId } as any,
-        status: 'processing',
-      },
+    console.log(`[Razorpay Webhook] ${event.event} → ${result.action}`, {
+      eventId,
+      processed: result.processed,
+      details: result.details,
     });
 
-    try {
-      // Process the event
-      await processRazorpayWebhook(event);
-
-      // Mark as processed
-      await prisma.webhookLog.update({
-        where: { id: log.id },
-        data: { status: 'processed', processedAt: new Date() },
-      });
-
-      console.log('Razorpay webhook processed:', {
-        event: event.event,
-        eventId,
-      });
-
-      return NextResponse.json({ received: true, processed: true });
-    } catch (processError) {
-      // Mark as failed
-      await prisma.webhookLog.update({
-        where: { id: log.id },
-        data: {
-          status: 'failed',
-          errorMessage: processError instanceof Error ? processError.message : 'Unknown error',
-        },
-      });
-
-      console.error('Razorpay webhook processing error:', processError);
-      // Still return 200 - Razorpay shouldn't retry for our processing errors
-      return NextResponse.json({ received: true, processed: false });
-    }
+    // Always return 200 to acknowledge receipt
+    return NextResponse.json({
+      received: true,
+      processed: result.processed,
+      action: result.action,
+    });
   } catch (error) {
-    console.error('Razorpay webhook handler error:', error);
+    const errMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[Razorpay Webhook] Unhandled error:', errMsg);
+
+    // Return 500 so Razorpay retries
     return NextResponse.json(
-      { error: 'Internal error' },
+      { error: 'Processing failed', message: errMsg },
       { status: 500 }
     );
   }
+}
+
+// Health check
+export async function GET() {
+  return NextResponse.json({
+    status: 'ok',
+    service: 'avatarforge-razorpay-webhook',
+    timestamp: new Date().toISOString(),
+  });
+}
+
+// ─── Helpers ─────────────────────────────────────────────────
+
+function extractEventId(event: any, req: NextRequest): string | null {
+  // Razorpay includes event ID in multiple places:
+  // 1. X-Razorpay-Event-Id header (newer API)
+  const headerEventId = req.headers.get('x-razorpay-event-id');
+  if (headerEventId) return headerEventId;
+
+  // 2. event.id field (older format)
+  if (event.id) return event.id;
+
+  // 3. Construct from event + entity ID + timestamp (fallback)
+  const entityId =
+    event.payload?.subscription?.entity?.id ||
+    event.payload?.payment?.entity?.id ||
+    event.payload?.invoice?.entity?.id;
+
+  if (entityId && event.event && event.created_at) {
+    return `${event.event}:${entityId}:${event.created_at}`;
+  }
+
+  return null;
 }

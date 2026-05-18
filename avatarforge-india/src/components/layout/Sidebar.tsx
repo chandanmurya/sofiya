@@ -11,6 +11,7 @@ const navigation = [
   { name: 'Clone Voice', nameHi: 'वॉइस क्लोन', href: '/clone-voice', icon: '🎙️' },
   { name: 'Create Video', nameHi: 'वीडियो बनाएं', href: '/create-video', icon: '🎬' },
   { name: 'My Videos', nameHi: 'मेरे वीडियो', href: '/my-videos', icon: '📹' },
+  { name: 'Pricing', nameHi: 'प्लान', href: '/pricing', icon: '💎' },
   { name: 'Billing', nameHi: 'बिलिंग', href: '/billing', icon: '💳' },
   { name: 'Settings', nameHi: 'सेटिंग्स', href: '/settings', icon: '⚙️' },
 ];

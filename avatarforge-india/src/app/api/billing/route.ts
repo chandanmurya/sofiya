@@ -1,185 +1,110 @@
 // ============================================
-// Billing API - Subscription management
+// GET /api/billing
+// Get current subscription, wallet, and plan info
 // ============================================
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth/session';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { PLANS, createSubscription, cancelSubscription } from '@/lib/razorpay/client';
-import { subscribeSchema, cancelSubscriptionSchema } from '@/lib/validations';
-import { resetMonthlyCredits } from '@/lib/credits';
-
-// ─── GET /api/billing - Get current subscription & credits ───
+import { getPlans, getTopupOptions, computeAvatarSetupPrice } from '@/lib/billing/profitability';
 
 export async function GET(req: NextRequest) {
   try {
-    const user = await requireAuth();
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const userId = (session.user as any).id;
 
-    const [subscription, creditBalance, recentInvoices] = await Promise.all([
-      prisma.subscription.findUnique({ where: { userId: user.id } }),
-      prisma.creditBalance.findUnique({ where: { userId: user.id } }),
+    const [subscription, wallet, recentInvoices, recentUsage] = await Promise.all([
+      prisma.subscription.findUnique({ where: { userId } }),
+      prisma.creditWallet.findUnique({ where: { userId } }),
       prisma.invoice.findMany({
-        where: { subscription: { userId: user.id } },
+        where: { subscription: { userId } },
         orderBy: { createdAt: 'desc' },
         take: 10,
       }),
+      prisma.usageLedger.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+      }),
     ]);
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        subscription: subscription || { plan: 'FREE', status: 'ACTIVE' },
-        credits: creditBalance || { balance: 0, totalEarned: 0, totalSpent: 0 },
-        invoices: recentInvoices,
-        plans: PLANS,
-      },
-    });
-  } catch (error: any) {
-    if (error.name === 'AuthError') {
-      return NextResponse.json({ success: false, error: error.message }, { status: 401 });
-    }
-    return NextResponse.json({ success: false, error: 'Failed to get billing info' }, { status: 500 });
-  }
-}
+    // Compute whether subscription is truly active
+    const isActive = subscription
+      ? ['ACTIVE', 'GRACE', 'CANCELLED'].includes(subscription.status)
+      : false;
 
-// ─── POST /api/billing - Subscribe to a plan ─────────────────
-
-export async function POST(req: NextRequest) {
-  try {
-    const user = await requireAuth();
-    const body = await req.json();
-
-    const parsed = subscribeSchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { success: false, error: 'Invalid request', details: parsed.error.flatten() },
-        { status: 400 }
-      );
-    }
-
-    const { planId } = parsed.data;
-    const plan = PLANS[planId];
-
-    if (!plan || !plan.razorpayPlanId) {
-      return NextResponse.json(
-        { success: false, error: 'Invalid plan' },
-        { status: 400 }
-      );
-    }
-
-    // Check if user already has an active subscription
-    const existingSub = await prisma.subscription.findUnique({
-      where: { userId: user.id },
-    });
-
-    if (existingSub?.status === 'ACTIVE' && existingSub.plan !== 'FREE') {
-      return NextResponse.json(
-        { success: false, error: 'You already have an active subscription. Cancel it first to change plans.' },
-        { status: 400 }
-      );
-    }
-
-    // Create Razorpay subscription
-    const razorpaySub = await createSubscription({
-      planId: plan.razorpayPlanId,
-      customerEmail: user.email,
-    });
-
-    // Update our subscription record
-    await prisma.subscription.upsert({
-      where: { userId: user.id },
-      update: {
-        plan: planId as any,
-        status: 'ACTIVE',
-        razorpaySubId: razorpaySub.id,
-        razorpayPlanId: plan.razorpayPlanId,
-        monthlyCredits: plan.credits,
-        maxAvatars: plan.maxAvatars,
-        maxVoices: plan.maxVoices,
-        maxResolution: plan.maxResolution as any,
-        maxVideoDurationSec: plan.maxVideoDurationSec,
-      },
-      create: {
-        userId: user.id,
-        plan: planId as any,
-        status: 'ACTIVE',
-        razorpaySubId: razorpaySub.id,
-        razorpayPlanId: plan.razorpayPlanId,
-        monthlyCredits: plan.credits,
-        maxAvatars: plan.maxAvatars,
-        maxVoices: plan.maxVoices,
-        maxResolution: plan.maxResolution as any,
-        maxVideoDurationSec: plan.maxVideoDurationSec,
-      },
-    });
-
-    // Grant credits immediately
-    await resetMonthlyCredits(user.id, plan.credits);
+    // Is in grace or blocked?
+    const isBlocked = subscription?.status === 'PAST_DUE' || subscription?.status === 'INACTIVE';
+    const isGrace = subscription?.status === 'GRACE';
 
     return NextResponse.json({
       success: true,
       data: {
-        subscriptionId: razorpaySub.id,
-        shortUrl: razorpaySub.short_url, // Razorpay payment link
-        plan: planId,
-        credits: plan.credits,
+        subscription: subscription
+          ? {
+              id: subscription.id,
+              plan: subscription.plan,
+              status: subscription.status,
+              monthlyIncludedSeconds: subscription.monthlyIncludedSeconds,
+              maxResolution: subscription.maxResolution,
+              priorityQueue: subscription.priorityQueue,
+              currentPeriodStart: subscription.currentPeriodStart,
+              currentPeriodEnd: subscription.currentPeriodEnd,
+              cancelledAt: subscription.cancelledAt,
+              gracePeriodEnd: subscription.gracePeriodEnd,
+            }
+          : null,
+        wallet: wallet
+          ? {
+              monthlyIncludedSeconds: wallet.monthlyIncludedSeconds,
+              monthlyRemaining: wallet.monthlyRemaining,
+              topupSeconds: wallet.topupSeconds,
+              totalAvailable: wallet.monthlyRemaining + wallet.topupSeconds,
+              totalSecondsEarned: wallet.totalSecondsEarned,
+              totalSecondsSpent: wallet.totalSecondsSpent,
+              monthlyResetAt: wallet.monthlyResetAt,
+            }
+          : {
+              monthlyIncludedSeconds: 0,
+              monthlyRemaining: 0,
+              topupSeconds: 0,
+              totalAvailable: 0,
+              totalSecondsEarned: 0,
+              totalSecondsSpent: 0,
+            },
+        isActive,
+        isBlocked,
+        isGrace,
+        plans: getPlans(),
+        topupOptions: getTopupOptions(),
+        avatarSetupPrice: computeAvatarSetupPrice(),
+        invoices: recentInvoices.map((inv) => ({
+          id: inv.id,
+          amount: inv.amount,
+          currency: inv.currency,
+          status: inv.status,
+          paidAt: inv.paidAt,
+          createdAt: inv.createdAt,
+        })),
+        recentUsage: recentUsage.map((u) => ({
+          id: u.id,
+          secondsUsed: u.secondsUsed,
+          source: u.source,
+          costEstimateInr: u.costEstimateInr,
+          description: u.description,
+          createdAt: u.createdAt,
+        })),
       },
     });
   } catch (error: any) {
-    if (error.name === 'AuthError') {
-      return NextResponse.json({ success: false, error: error.message }, { status: 401 });
-    }
-    console.error('Subscribe error:', error);
-    return NextResponse.json({ success: false, error: 'Failed to create subscription' }, { status: 500 });
-  }
-}
-
-// ─── DELETE /api/billing - Cancel subscription ───────────────
-
-export async function DELETE(req: NextRequest) {
-  try {
-    const user = await requireAuth();
-    const body = await req.json().catch(() => ({}));
-
-    const parsed = cancelSubscriptionSchema.safeParse(body);
-    const cancelAtEnd = parsed.success ? parsed.data.cancelAtEnd : true;
-
-    const subscription = await prisma.subscription.findUnique({
-      where: { userId: user.id },
-    });
-
-    if (!subscription || !subscription.razorpaySubId) {
-      return NextResponse.json(
-        { success: false, error: 'No active subscription to cancel' },
-        { status: 400 }
-      );
-    }
-
-    // Cancel on Razorpay
-    await cancelSubscription(subscription.razorpaySubId, cancelAtEnd);
-
-    // Update local record
-    await prisma.subscription.update({
-      where: { userId: user.id },
-      data: {
-        status: cancelAtEnd ? 'ACTIVE' : 'CANCELLED', // Will be cancelled at period end
-        cancelledAt: new Date(),
-      },
-    });
-
-    return NextResponse.json({
-      success: true,
-      data: {
-        message: cancelAtEnd
-          ? 'Subscription will be cancelled at the end of current billing period.'
-          : 'Subscription cancelled immediately.',
-      },
-    });
-  } catch (error: any) {
-    if (error.name === 'AuthError') {
-      return NextResponse.json({ success: false, error: error.message }, { status: 401 });
-    }
-    console.error('Cancel subscription error:', error);
-    return NextResponse.json({ success: false, error: 'Failed to cancel subscription' }, { status: 500 });
+    console.error('[Billing GET] Error:', error);
+    return NextResponse.json(
+      { error: 'Failed to fetch billing data' },
+      { status: 500 }
+    );
   }
 }

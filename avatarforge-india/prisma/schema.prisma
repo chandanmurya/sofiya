@@ -1,6 +1,9 @@
 // ============================================
-// AvatarForge India - Database Schema
+// AvatarForge India - Database Schema v2
 // ============================================
+// Updated: Strict profitability billing model
+// 1 credit = 1 second of video output
+// Separate credit_wallet, usage_ledger, events_dedup, add_ons
 
 generator client {
   provider = "prisma-client-js"
@@ -74,9 +77,11 @@ model User {
   voices        VoiceClone[]
   videos        Video[]
   subscription  Subscription?
-  usageRecords  UsageRecord[]
-  creditBalance CreditBalance?
+  creditWallet  CreditWallet?
+  usageLedger   UsageLedger[]
   jobs          Job[]
+  addOns        AddOn[]
+  topups        TopupPurchase[]
 
   @@index([email])
 }
@@ -93,30 +98,32 @@ model Avatar {
   userId          String
   name            String
   status          AvatarStatus @default(PENDING_UPLOAD)
-  
+
   // Training video
   trainingVideoUrl   String?
-  trainingVideoKey   String?  // R2 object key
+  trainingVideoKey   String?
   trainingDurationSec Int?
-  
+
   // HeyGen integration
   heygenAvatarId     String?  @unique
   heygenGroupId      String?
   consentUrl         String?
   consentStatus      ConsentStatus @default(PENDING)
   consentCompletedAt DateTime?
-  
+
   // Metadata
   thumbnailUrl    String?
   errorMessage    String?
   retryCount      Int      @default(0)
   idempotencyKey  String   @unique @default(cuid())
+  rawResponse     Json?    // Store HeyGen raw response for debugging
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   // Relations
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   videos Video[]
+  addOn  AddOn?  @relation("AvatarAddOn") // linked to add-on purchase
 
   @@index([userId])
   @@index([heygenAvatarId])
@@ -149,21 +156,22 @@ model VoiceClone {
   userId        String
   name          String
   status        VoiceStatus @default(PENDING_UPLOAD)
-  
+
   // Audio source
   audioUrl      String?
-  audioKey      String?    // R2 object key
+  audioKey      String?
   audioDurationSec Int?
   sourceType    VoiceSourceType @default(DEDICATED_AUDIO)
-  
+
   // HeyGen integration
   heygenVoiceId String?   @unique
-  
+
   // Metadata
   language      String    @default("en")
   errorMessage  String?
   retryCount    Int       @default(0)
   idempotencyKey String   @unique @default(cuid())
+  rawResponse   Json?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -199,38 +207,39 @@ model Video {
   voiceId        String
   title          String
   status         VideoStatus @default(DRAFT)
-  
+
   // Script
   script         String      @db.Text
   scriptLanguage String      @default("en")
-  
+
   // Video config
   aspectRatio    AspectRatio @default(LANDSCAPE_16_9)
   resolution     Resolution  @default(HD_720P)
   backgroundColor String?    @default("#000000")
   backgroundImageUrl String?
   transparentBg  Boolean     @default(false)
-  
+
   // HeyGen integration
   heygenVideoId  String?    @unique
-  
+
   // Output
   outputUrl      String?
-  outputKey      String?    // R2 object key
-  durationSec    Int?
+  outputKey      String?
+  durationSec    Int?       // actual output duration
   fileSizeMb     Float?
-  
-  // Cost tracking
-  creditsUsed    Int        @default(0)
-  estimatedCost  Float?     // INR cost estimate
-  
+
+  // Cost tracking (seconds-based)
+  secondsUsed    Int        @default(0)  // actual seconds consumed from wallet
+  costEstimateInr Float?
+
   // Template
   templateId     String?
-  
+
   // Metadata
   errorMessage   String?
   retryCount     Int        @default(0)
   idempotencyKey String     @unique @default(cuid())
+  rawResponse    Json?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
   completedAt    DateTime?
@@ -266,6 +275,7 @@ enum Resolution {
   SD_480P
   HD_720P
   FHD_1080P
+  UHD_4K
 }
 
 // ─── Job Queue Model ─────────────────────────────────────────
@@ -275,28 +285,23 @@ model Job {
   userId         String
   type           JobType
   status         JobStatus @default(PENDING)
-  
-  // Reference to entity
-  entityId       String    // avatarId, voiceId, or videoId
+
+  entityId       String
   entityType     EntityType
-  
-  // BullMQ reference
+
   bullmqJobId    String?
-  
-  // Execution details
+
   attempts       Int       @default(0)
   maxAttempts    Int       @default(3)
   lastError      String?   @db.Text
   idempotencyKey String    @unique
-  
-  // Timing
+
   scheduledAt    DateTime?
   startedAt      DateTime?
   completedAt    DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  // Relations
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
@@ -327,31 +332,36 @@ enum EntityType {
   VIDEO
 }
 
-// ─── Billing Models ──────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// BILLING v2: Strict Profitability Model
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Subscription ────────────────────────────────────────────
 
 model Subscription {
   id                  String             @id @default(cuid())
   userId              String             @unique
-  plan                PlanType           @default(FREE)
-  status              SubscriptionStatus @default(ACTIVE)
-  
+  plan                PlanType           @default(STARTER)
+  status              SubscriptionStatus @default(CREATED)
+
   // Razorpay integration
   razorpaySubId       String?            @unique
   razorpayPlanId      String?
   razorpayCustomerId  String?
-  
+
   // Billing cycle
-  currentPeriodStart  DateTime           @default(now())
+  currentPeriodStart  DateTime?
   currentPeriodEnd    DateTime?
   cancelledAt         DateTime?
-  
-  // Plan limits (snapshot at subscription time)
-  monthlyCredits      Int                @default(50)
-  maxAvatars          Int                @default(1)
-  maxVoices           Int                @default(1)
-  maxResolution       Resolution         @default(HD_720P)
-  maxVideoDurationSec Int                @default(60)
-  
+
+  // Plan snapshot (computed from profitability engine at subscription time)
+  monthlyIncludedSeconds Int             @default(60)
+  maxResolution          String          @default("720p")
+  priorityQueue          Boolean         @default(false)
+
+  // Grace period handling
+  gracePeriodEnd      DateTime?          // 3 days after payment failure
+
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 
@@ -360,37 +370,185 @@ model Subscription {
   invoices Invoice[]
 
   @@index([razorpaySubId])
+  @@index([status])
 }
 
 enum PlanType {
-  FREE
   STARTER
   CREATOR
-  AGENCY
+  STUDIO
 }
 
 enum SubscriptionStatus {
+  CREATED     // subscription created but not yet activated
   ACTIVE
-  PAST_DUE
-  CANCELLED
+  GRACE       // payment failed, 3-day grace period
+  PAST_DUE    // grace expired, blocked
+  CANCELLED   // user cancelled (active until period end)
+  INACTIVE    // fully cancelled/expired
   PAUSED
-  EXPIRED
 }
+
+// ─── Credit Wallet ───────────────────────────────────────────
+// 1 credit = 1 second of video output
+
+model CreditWallet {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+
+  // Monthly included seconds (reset each billing cycle)
+  monthlyIncludedSeconds Int     @default(60)
+  monthlyRemaining       Int     @default(60)   // decremented on use
+  monthlyResetAt         DateTime @default(now())
+
+  // Top-up seconds (purchased separately, expire per TOPUP_EXPIRY_DAYS)
+  topupSeconds           Int     @default(0)
+
+  // Lifetime counters
+  totalSecondsEarned     Int     @default(0)
+  totalSecondsSpent      Int     @default(0)
+
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Usage Ledger ────────────────────────────────────────────
+// Every second consumed is logged here for audit + billing reconciliation
+
+model UsageLedger {
+  id              String    @id @default(cuid())
+  userId          String
+  jobId           String?   // optional: linked video/job
+  videoId         String?   // direct video reference
+
+  secondsUsed     Int       // ceil(actual_video_seconds)
+  source          CreditSource // which bucket was consumed
+  costEstimateInr Float     // estimated cost to us in INR
+
+  description     String?
+  createdAt       DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([videoId])
+}
+
+enum CreditSource {
+  MONTHLY    // from monthlyRemaining
+  TOPUP      // from topupSeconds
+}
+
+// ─── Events Dedup (Webhook Idempotency) ──────────────────────
+// Ensures each webhook event is processed exactly once
+
+model EventDedup {
+  id        String   @id @default(cuid())
+  provider  String   // 'razorpay' | 'heygen'
+  eventId   String   // razorpay event_id or heygen callback_id
+
+  processed Boolean  @default(false)
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@unique([provider, eventId])
+  @@index([provider, eventId])
+}
+
+// ─── Add-Ons (Avatar Setup) ──────────────────────────────────
+
+model AddOn {
+  id                String    @id @default(cuid())
+  userId            String
+  type              AddOnType
+  status            AddOnStatus @default(PENDING_PAYMENT)
+
+  // Pricing (snapshot at purchase time)
+  priceInr          Int       // customer price in paise (INR * 100)
+  costInr           Int       // our cost in paise
+
+  // Razorpay payment
+  razorpayOrderId   String?   @unique
+  razorpayPaymentId String?   @unique
+
+  // Linked entity
+  avatarId          String?   @unique // for AVATAR_SETUP type
+
+  createdAt         DateTime  @default(now())
+  completedAt       DateTime?
+
+  // Relations
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  avatar Avatar? @relation("AvatarAddOn", fields: [avatarId], references: [id])
+
+  @@index([userId])
+  @@index([type, status])
+}
+
+enum AddOnType {
+  AVATAR_SETUP
+}
+
+enum AddOnStatus {
+  PENDING_PAYMENT
+  PAID
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+// ─── Top-up Purchases ────────────────────────────────────────
+
+model TopupPurchase {
+  id                String       @id @default(cuid())
+  userId            String
+
+  seconds           Int          // seconds purchased
+  priceInr          Int          // in paise (INR * 100)
+
+  // Razorpay payment
+  razorpayOrderId   String?      @unique
+  razorpayPaymentId String?      @unique
+
+  status            TopupStatus  @default(PENDING_PAYMENT)
+  expiresAt         DateTime?    // topups expire after N days
+
+  createdAt         DateTime     @default(now())
+  paidAt            DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+enum TopupStatus {
+  PENDING_PAYMENT
+  PAID
+  EXPIRED
+  REFUNDED
+}
+
+// ─── Invoices ────────────────────────────────────────────────
 
 model Invoice {
   id                 String        @id @default(cuid())
   subscriptionId     String
   razorpayInvoiceId  String?       @unique
   razorpayPaymentId  String?
-  
+
   amount             Int           // in paise (INR * 100)
   currency           String        @default("INR")
   status             InvoiceStatus @default(PENDING)
-  
+
   paidAt             DateTime?
   createdAt          DateTime      @default(now())
 
-  // Relations
   subscription Subscription @relation(fields: [subscriptionId], references: [id])
 
   @@index([subscriptionId])
@@ -404,52 +562,14 @@ enum InvoiceStatus {
   REFUNDED
 }
 
-// ─── Credits & Usage Models ──────────────────────────────────
-
-model CreditBalance {
-  id            String   @id @default(cuid())
-  userId        String   @unique
-  balance       Int      @default(0) // current available credits
-  totalEarned   Int      @default(0) // lifetime credits earned/purchased
-  totalSpent    Int      @default(0) // lifetime credits consumed
-  lastResetAt   DateTime @default(now())
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
-model UsageRecord {
-  id          String    @id @default(cuid())
-  userId      String
-  type        UsageType
-  entityId    String
-  credits     Int       // credits consumed
-  costInr     Float     // actual HeyGen API cost in INR
-  description String?
-  createdAt   DateTime  @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([createdAt])
-  @@index([type])
-}
-
-enum UsageType {
-  AVATAR_TRAINING
-  VOICE_CLONING
-  VIDEO_GENERATION
-}
-
 // ─── Templates ───────────────────────────────────────────────
 
 model ScriptTemplate {
   id          String   @id @default(cuid())
   name        String
-  nameHi      String?  // Hindi/Hinglish name
-  category    String   // reel, explainer, promo, education
-  language    String   // en, hi, hinglish
+  nameHi      String?
+  category    String
+  language    String
   script      String   @db.Text
   aspectRatio AspectRatio @default(PORTRAIT_9_16)
   isActive    Boolean  @default(true)
@@ -460,14 +580,14 @@ model ScriptTemplate {
   @@index([language])
 }
 
-// ─── Webhook Logs ────────────────────────────────────────────
+// ─── Webhook Logs (General Audit) ────────────────────────────
 
 model WebhookLog {
   id          String   @id @default(cuid())
-  source      String   // heygen, razorpay
+  source      String
   eventType   String
   payload     Json
-  status      String   @default("received") // received, processed, failed
+  status      String   @default("received")
   errorMessage String?
   processedAt DateTime?
   createdAt   DateTime @default(now())
