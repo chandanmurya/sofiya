@@ -1,0 +1,477 @@
+// ============================================
+// AvatarForge India - Database Schema
+// ============================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Auth Models ─────────────────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── User Model ──────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+  phone         String?
+  role          UserRole  @default(USER)
+  locale        String    @default("en")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  accounts      Account[]
+  sessions      Session[]
+  avatars       Avatar[]
+  voices        VoiceClone[]
+  videos        Video[]
+  subscription  Subscription?
+  usageRecords  UsageRecord[]
+  creditBalance CreditBalance?
+  jobs          Job[]
+
+  @@index([email])
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+// ─── Avatar Model ────────────────────────────────────────────
+
+model Avatar {
+  id              String       @id @default(cuid())
+  userId          String
+  name            String
+  status          AvatarStatus @default(PENDING_UPLOAD)
+  
+  // Training video
+  trainingVideoUrl   String?
+  trainingVideoKey   String?  // R2 object key
+  trainingDurationSec Int?
+  
+  // HeyGen integration
+  heygenAvatarId     String?  @unique
+  heygenGroupId      String?
+  consentUrl         String?
+  consentStatus      ConsentStatus @default(PENDING)
+  consentCompletedAt DateTime?
+  
+  // Metadata
+  thumbnailUrl    String?
+  errorMessage    String?
+  retryCount      Int      @default(0)
+  idempotencyKey  String   @unique @default(cuid())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videos Video[]
+
+  @@index([userId])
+  @@index([heygenAvatarId])
+  @@index([status])
+}
+
+enum AvatarStatus {
+  PENDING_UPLOAD
+  UPLOADING
+  UPLOADED
+  CONSENT_REQUIRED
+  CONSENT_PENDING
+  TRAINING
+  TRAINING_FAILED
+  READY
+  FAILED
+}
+
+enum ConsentStatus {
+  PENDING
+  SENT
+  COMPLETED
+  FAILED
+}
+
+// ─── Voice Clone Model ───────────────────────────────────────
+
+model VoiceClone {
+  id            String     @id @default(cuid())
+  userId        String
+  name          String
+  status        VoiceStatus @default(PENDING_UPLOAD)
+  
+  // Audio source
+  audioUrl      String?
+  audioKey      String?    // R2 object key
+  audioDurationSec Int?
+  sourceType    VoiceSourceType @default(DEDICATED_AUDIO)
+  
+  // HeyGen integration
+  heygenVoiceId String?   @unique
+  
+  // Metadata
+  language      String    @default("en")
+  errorMessage  String?
+  retryCount    Int       @default(0)
+  idempotencyKey String   @unique @default(cuid())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videos Video[]
+
+  @@index([userId])
+  @@index([heygenVoiceId])
+}
+
+enum VoiceStatus {
+  PENDING_UPLOAD
+  UPLOADING
+  UPLOADED
+  CLONING
+  CLONE_FAILED
+  READY
+  FAILED
+}
+
+enum VoiceSourceType {
+  DEDICATED_AUDIO
+  EXTRACTED_FROM_VIDEO
+}
+
+// ─── Video Model ─────────────────────────────────────────────
+
+model Video {
+  id             String      @id @default(cuid())
+  userId         String
+  avatarId       String
+  voiceId        String
+  title          String
+  status         VideoStatus @default(DRAFT)
+  
+  // Script
+  script         String      @db.Text
+  scriptLanguage String      @default("en")
+  
+  // Video config
+  aspectRatio    AspectRatio @default(LANDSCAPE_16_9)
+  resolution     Resolution  @default(HD_720P)
+  backgroundColor String?    @default("#000000")
+  backgroundImageUrl String?
+  transparentBg  Boolean     @default(false)
+  
+  // HeyGen integration
+  heygenVideoId  String?    @unique
+  
+  // Output
+  outputUrl      String?
+  outputKey      String?    // R2 object key
+  durationSec    Int?
+  fileSizeMb     Float?
+  
+  // Cost tracking
+  creditsUsed    Int        @default(0)
+  estimatedCost  Float?     // INR cost estimate
+  
+  // Template
+  templateId     String?
+  
+  // Metadata
+  errorMessage   String?
+  retryCount     Int        @default(0)
+  idempotencyKey String     @unique @default(cuid())
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  completedAt    DateTime?
+
+  // Relations
+  user    User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  avatar  Avatar     @relation(fields: [avatarId], references: [id])
+  voice   VoiceClone @relation(fields: [voiceId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([heygenVideoId])
+  @@index([createdAt])
+}
+
+enum VideoStatus {
+  DRAFT
+  QUEUED
+  GENERATING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AspectRatio {
+  PORTRAIT_9_16
+  LANDSCAPE_16_9
+  SQUARE_1_1
+}
+
+enum Resolution {
+  SD_480P
+  HD_720P
+  FHD_1080P
+}
+
+// ─── Job Queue Model ─────────────────────────────────────────
+
+model Job {
+  id             String    @id @default(cuid())
+  userId         String
+  type           JobType
+  status         JobStatus @default(PENDING)
+  
+  // Reference to entity
+  entityId       String    // avatarId, voiceId, or videoId
+  entityType     EntityType
+  
+  // BullMQ reference
+  bullmqJobId    String?
+  
+  // Execution details
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(3)
+  lastError      String?   @db.Text
+  idempotencyKey String    @unique
+  
+  // Timing
+  scheduledAt    DateTime?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([type])
+  @@index([entityId, entityType])
+}
+
+enum JobType {
+  AVATAR_TRAINING
+  VOICE_CLONING
+  VIDEO_GENERATION
+  VIDEO_DOWNLOAD
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  WAITING_CALLBACK
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum EntityType {
+  AVATAR
+  VOICE
+  VIDEO
+}
+
+// ─── Billing Models ──────────────────────────────────────────
+
+model Subscription {
+  id                  String             @id @default(cuid())
+  userId              String             @unique
+  plan                PlanType           @default(FREE)
+  status              SubscriptionStatus @default(ACTIVE)
+  
+  // Razorpay integration
+  razorpaySubId       String?            @unique
+  razorpayPlanId      String?
+  razorpayCustomerId  String?
+  
+  // Billing cycle
+  currentPeriodStart  DateTime           @default(now())
+  currentPeriodEnd    DateTime?
+  cancelledAt         DateTime?
+  
+  // Plan limits (snapshot at subscription time)
+  monthlyCredits      Int                @default(50)
+  maxAvatars          Int                @default(1)
+  maxVoices           Int                @default(1)
+  maxResolution       Resolution         @default(HD_720P)
+  maxVideoDurationSec Int                @default(60)
+  
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  // Relations
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoices Invoice[]
+
+  @@index([razorpaySubId])
+}
+
+enum PlanType {
+  FREE
+  STARTER
+  CREATOR
+  AGENCY
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  PAUSED
+  EXPIRED
+}
+
+model Invoice {
+  id                 String        @id @default(cuid())
+  subscriptionId     String
+  razorpayInvoiceId  String?       @unique
+  razorpayPaymentId  String?
+  
+  amount             Int           // in paise (INR * 100)
+  currency           String        @default("INR")
+  status             InvoiceStatus @default(PENDING)
+  
+  paidAt             DateTime?
+  createdAt          DateTime      @default(now())
+
+  // Relations
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+
+  @@index([subscriptionId])
+  @@index([razorpayPaymentId])
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+// ─── Credits & Usage Models ──────────────────────────────────
+
+model CreditBalance {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  balance       Int      @default(0) // current available credits
+  totalEarned   Int      @default(0) // lifetime credits earned/purchased
+  totalSpent    Int      @default(0) // lifetime credits consumed
+  lastResetAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UsageRecord {
+  id          String    @id @default(cuid())
+  userId      String
+  type        UsageType
+  entityId    String
+  credits     Int       // credits consumed
+  costInr     Float     // actual HeyGen API cost in INR
+  description String?
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([type])
+}
+
+enum UsageType {
+  AVATAR_TRAINING
+  VOICE_CLONING
+  VIDEO_GENERATION
+}
+
+// ─── Templates ───────────────────────────────────────────────
+
+model ScriptTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  nameHi      String?  // Hindi/Hinglish name
+  category    String   // reel, explainer, promo, education
+  language    String   // en, hi, hinglish
+  script      String   @db.Text
+  aspectRatio AspectRatio @default(PORTRAIT_9_16)
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([category])
+  @@index([language])
+}
+
+// ─── Webhook Logs ────────────────────────────────────────────
+
+model WebhookLog {
+  id          String   @id @default(cuid())
+  source      String   // heygen, razorpay
+  eventType   String
+  payload     Json
+  status      String   @default("received") // received, processed, failed
+  errorMessage String?
+  processedAt DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([source, eventType])
+  @@index([createdAt])
+}
