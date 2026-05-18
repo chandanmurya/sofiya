@@ -3,15 +3,18 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
+import { Button } from '@/components/ui/Button';
+import { Card, CardTitle, CardDescription } from '@/components/ui/Card';
 import { FileUpload } from '@/components/ui/FileUpload';
 import { ProgressTracker } from '@/components/ui/ProgressTracker';
+import { StatusBadge } from '@/components/ui/StatusBadge';
 import { usePolling } from '@/hooks/usePolling';
 
-type FlowStep = 'upload' | 'details' | 'processing' | 'consent' | 'training' | 'ready';
+type WizardStep = 'upload' | 'details' | 'submitting' | 'consent' | 'training' | 'ready';
 
 export default function CreateAvatarPage() {
   const router = useRouter();
-  const [step, setStep] = useState<FlowStep>('upload');
+  const [step, setStep] = useState<WizardStep>('upload');
   const [uploadedKey, setUploadedKey] = useState<string | null>(null);
   const [avatarName, setAvatarName] = useState('');
   const [avatarId, setAvatarId] = useState<string | null>(null);
@@ -19,51 +22,58 @@ export default function CreateAvatarPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Polling for status after creation
+  // ─── Polling for avatar status after submission ────────
   const { data: statusData } = usePolling({
     url: avatarId ? `/api/avatars/${avatarId}/status` : '',
-    enabled: !!avatarId && ['processing', 'consent', 'training'].includes(step),
-    interval: 8000,
+    enabled: !!avatarId && ['submitting', 'consent', 'training'].includes(step),
+    interval: 7000,
+    maxAttempts: 120, // ~14 minutes max polling
     stopWhen: (d) => ['READY', 'FAILED', 'TRAINING_FAILED'].includes(d?.status),
     onUpdate: (d) => {
       if (d?.status === 'READY') {
         setStep('ready');
-        toast.success('Avatar is ready! 🎉');
+        toast.success('Your Digital Twin is ready!');
       } else if (d?.status === 'CONSENT_REQUIRED' || d?.status === 'CONSENT_PENDING') {
         setStep('consent');
         if (d.consentUrl) setConsentUrl(d.consentUrl);
       } else if (d?.status === 'TRAINING') {
         setStep('training');
-      } else if (d?.status === 'FAILED' || d?.status === 'TRAINING_FAILED') {
-        setError(d.errorMessage || 'Avatar training failed');
+      } else if (['FAILED', 'TRAINING_FAILED'].includes(d?.status)) {
+        setError(d.errorMessage || 'Avatar training failed. Please try again.');
       }
     },
   });
 
+  // ─── Progress Steps ────────────────────────────────────
   const progressSteps = [
-    { id: 'upload', label: 'Upload Video', labelHi: 'वीडियो अपलोड', status: getStepStatus('upload') },
-    { id: 'details', label: 'Details', labelHi: 'विवरण', status: getStepStatus('details') },
-    { id: 'consent', label: 'Consent', labelHi: 'सहमति', status: getStepStatus('consent') },
-    { id: 'training', label: 'Training', labelHi: 'ट्रेनिंग', status: getStepStatus('training') },
-    { id: 'ready', label: 'Ready', labelHi: 'तैयार', status: getStepStatus('ready') },
+    { id: 'upload', label: 'Upload', status: getStepStatus('upload') },
+    { id: 'details', label: 'Details', status: getStepStatus('details') },
+    { id: 'consent', label: 'Consent', status: getStepStatus('consent') },
+    { id: 'training', label: 'Training', status: getStepStatus('training') },
+    { id: 'ready', label: 'Ready', status: getStepStatus('ready') },
   ] as any;
 
-  function getStepStatus(s: string) {
-    const order = ['upload', 'details', 'processing', 'consent', 'training', 'ready'];
+  function getStepStatus(s: string): 'completed' | 'current' | 'upcoming' | 'failed' {
+    const order: WizardStep[] = ['upload', 'details', 'submitting', 'consent', 'training', 'ready'];
     const currentIdx = order.indexOf(step);
-    const stepIdx = order.indexOf(s);
-    if (step === s) return 'current';
-    if (stepIdx < currentIdx) return 'completed';
-    if (error && step === s) return 'failed';
+    const stepIdx = order.indexOf(s as WizardStep);
+    // Map submitting to details for display
+    const displayStep = step === 'submitting' ? 'details' : step;
+    const displayIdx = order.indexOf(displayStep);
+
+    if (error && s === step) return 'failed';
+    if (s === displayStep) return 'current';
+    if (stepIdx < displayIdx) return 'completed';
     return 'upcoming';
   }
 
+  // ─── Submit Avatar ─────────────────────────────────────
   async function handleCreateAvatar() {
     if (!uploadedKey || !avatarName.trim()) return;
 
     setLoading(true);
     setError(null);
-    setStep('processing');
+    setStep('submitting');
 
     try {
       const res = await fetch('/api/avatars', {
@@ -77,7 +87,7 @@ export default function CreateAvatarPage() {
 
       const data = await res.json();
 
-      if (!data.success) {
+      if (!res.ok || !data.success) {
         throw new Error(data.error || 'Failed to create avatar');
       }
 
@@ -86,7 +96,7 @@ export default function CreateAvatarPage() {
       if (data.data.consentRequired) {
         setConsentUrl(data.data.consentUrl);
         setStep('consent');
-        toast('Consent required. Please complete the verification.', { icon: '📋' });
+        toast('Consent verification required', { icon: '📋' });
       } else {
         setStep('training');
         toast.success('Avatar submitted for training!');
@@ -102,180 +112,266 @@ export default function CreateAvatarPage() {
 
   return (
     <div className="page-container max-w-3xl mx-auto">
-      <h1 className="page-title">Create Your Digital Twin</h1>
-      <p className="page-subtitle">
-        Upload a 5-10 minute training video to create your AI avatar clone.
-      </p>
+      {/* Header */}
+      <div className="mb-6">
+        <h1 className="page-title">Create Your Digital Twin</h1>
+        <p className="page-subtitle">
+          Upload a 5–10 minute training video to create your AI avatar clone.
+        </p>
+      </div>
 
-      {/* Progress Tracker */}
+      {/* Progress Stepper */}
       <div className="mb-10">
         <ProgressTracker steps={progressSteps} />
       </div>
 
-      {/* Error State */}
+      {/* Error Banner */}
       {error && (
-        <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <p className="text-red-400 text-sm">⚠️ {error}</p>
-          <button
-            onClick={() => { setError(null); setStep('details'); }}
-            className="text-xs text-red-300 underline mt-2"
-          >
-            Try again
-          </button>
+        <div className="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/20 flex items-start gap-3">
+          <span className="text-red-400 mt-0.5">⚠️</span>
+          <div className="flex-1">
+            <p className="text-sm text-red-300">{error}</p>
+            <button
+              onClick={() => { setError(null); setStep('details'); }}
+              className="text-xs text-red-400/80 hover:text-red-300 mt-1.5 underline"
+            >
+              Try again
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Step: Upload */}
+      {/* ═══ STEP: Upload ═══ */}
       {step === 'upload' && (
-        <div className="glass-card p-8">
-          <h2 className="text-lg font-semibold text-white mb-4">
-            Step 1: Upload Training Video
-          </h2>
-          <FileUpload
-            type="training-video"
-            accept="video/mp4,video/quicktime,video/webm"
-            maxSizeMb={500}
-            onUploadComplete={({ key }) => {
-              setUploadedKey(key);
-              setStep('details');
-              toast.success('Video uploaded!');
-            }}
-            onError={(err) => toast.error(err)}
-            guidelines={{
-              duration: '5-10 minutes recommended',
-              quality: 'At least 720p, good lighting',
-              framing: 'Head and shoulders, look at camera',
-              audio: 'Clear speech, no background noise',
-              format: 'MP4 preferred, max 500MB',
-            }}
-          />
-        </div>
+        <Card padding="lg">
+          <CardTitle>Step 1: Upload Training Video</CardTitle>
+          <CardDescription>
+            Record yourself speaking naturally for 5–10 minutes. Look at the camera.
+          </CardDescription>
+
+          <div className="mt-6">
+            <FileUpload
+              type="training-video"
+              accept="video/mp4,video/quicktime,video/webm"
+              maxSizeMb={500}
+              onUploadComplete={({ key }) => {
+                setUploadedKey(key);
+                setStep('details');
+                toast.success('Video uploaded successfully!');
+              }}
+              onError={(err) => toast.error(err)}
+              guidelines={{
+                duration: '5–10 minutes (required)',
+                resolution: 'At least 720p, 1080p preferred',
+                lighting: 'Well-lit, even lighting, no harsh shadows',
+                background: 'Clean, uncluttered background',
+                framing: 'Head & shoulders visible, centered in frame',
+                audio: 'Clear speech, minimal background noise',
+                movement: 'Natural head movements, look at camera',
+                format: 'MP4 preferred, max 500MB',
+              }}
+            />
+          </div>
+
+          {/* Tips Card */}
+          <div className="mt-6 p-4 rounded-xl bg-dark-600/30 border border-dark-400/10">
+            <h4 className="text-xs font-semibold text-white uppercase tracking-wider mb-3">
+              💡 Tips for Best Results
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {[
+                { icon: '🎥', tip: 'Use your phone camera at eye level' },
+                { icon: '💡', tip: 'Face a window for natural lighting' },
+                { icon: '🗣️', tip: 'Speak clearly at a natural pace' },
+                { icon: '👀', tip: 'Look directly at the camera lens' },
+                { icon: '🤫', tip: 'Record in a quiet room' },
+                { icon: '📐', tip: 'Keep face centered in the frame' },
+              ].map((item, i) => (
+                <div key={i} className="flex items-center gap-2.5">
+                  <span className="text-sm">{item.icon}</span>
+                  <span className="text-xs text-dark-100">{item.tip}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 p-3 rounded-lg bg-yellow-500/5 border border-yellow-500/10">
+              <p className="text-[11px] text-yellow-300/80">
+                <strong>Compression tip:</strong> If your file is too large, use{' '}
+                <a href="https://handbrake.fr" target="_blank" rel="noopener" className="underline">HandBrake</a>{' '}
+                (free) → H.264, CRF 23, to reduce size without quality loss.
+              </p>
+            </div>
+          </div>
+        </Card>
       )}
 
-      {/* Step: Details */}
+      {/* ═══ STEP: Details ═══ */}
       {step === 'details' && (
-        <div className="glass-card p-8">
-          <h2 className="text-lg font-semibold text-white mb-4">
-            Step 2: Name Your Avatar
-          </h2>
-          <div className="space-y-4">
+        <Card padding="lg">
+          <CardTitle>Step 2: Name Your Avatar</CardTitle>
+          <CardDescription>
+            Choose a name for your Digital Twin. This is for your reference only.
+          </CardDescription>
+
+          <div className="mt-6 space-y-5">
             <div>
-              <label className="label">Avatar Name</label>
+              <label htmlFor="avatar-name" className="label">Avatar Name</label>
               <input
+                id="avatar-name"
                 type="text"
                 value={avatarName}
                 onChange={(e) => setAvatarName(e.target.value)}
                 className="input-field"
-                placeholder="e.g., My Digital Twin"
+                placeholder="e.g., My Digital Twin, Hindi Avatar"
                 maxLength={50}
+                autoFocus
               />
-              <p className="text-xs text-dark-200 mt-1">This name is for your reference only.</p>
+              <p className="text-[11px] text-dark-300 mt-1.5">2–50 characters</p>
             </div>
 
-            <div className="p-4 bg-dark-600/50 rounded-lg">
-              <p className="text-sm text-dark-100 mb-2">📝 What happens next:</p>
-              <ol className="text-xs text-dark-200 space-y-1 list-decimal pl-4">
-                <li>HeyGen will process your video</li>
-                <li>You'll need to complete a consent verification (face + voice match)</li>
-                <li>Once consent is approved, training begins (~10-30 minutes)</li>
-                <li>Your avatar will be ready to use!</li>
+            {/* What happens next */}
+            <div className="p-4 rounded-xl bg-dark-600/30 border border-dark-400/10">
+              <h4 className="text-xs font-semibold text-white mb-3">📝 What happens next:</h4>
+              <ol className="space-y-2">
+                {[
+                  'We send your video to HeyGen for processing',
+                  'You complete a consent verification (face + voice match)',
+                  'Once consent is approved, avatar training begins (~10–30 min)',
+                  'Your Digital Twin will be ready to generate videos!',
+                ].map((item, i) => (
+                  <li key={i} className="flex items-start gap-2.5">
+                    <span className="w-5 h-5 rounded-full bg-brand-500/10 border border-brand-500/30 flex items-center justify-center text-[10px] text-brand-400 font-bold shrink-0 mt-0.5">
+                      {i + 1}
+                    </span>
+                    <span className="text-xs text-dark-100">{item}</span>
+                  </li>
+                ))}
               </ol>
             </div>
 
-            <div className="flex gap-3">
-              <button
-                onClick={() => setStep('upload')}
-                className="btn-secondary"
-              >
+            {/* Actions */}
+            <div className="flex gap-3 pt-2">
+              <Button variant="secondary" onClick={() => setStep('upload')}>
                 ← Back
-              </button>
-              <button
+              </Button>
+              <Button
+                className="flex-1"
                 onClick={handleCreateAvatar}
-                disabled={!avatarName.trim() || loading}
-                className="btn-primary flex-1"
+                loading={loading}
+                disabled={!avatarName.trim() || avatarName.trim().length < 2}
               >
-                {loading ? 'Creating...' : 'Create Avatar (50 credits)'}
-              </button>
+                Create Avatar (uses Avatar Setup credit)
+              </Button>
             </div>
           </div>
-        </div>
+        </Card>
       )}
 
-      {/* Step: Consent */}
+      {/* ═══ STEP: Consent ═══ */}
       {step === 'consent' && (
-        <div className="glass-card p-8 text-center">
-          <div className="text-5xl mb-4">📋</div>
-          <h2 className="text-lg font-semibold text-white mb-2">
-            Consent Required
-          </h2>
-          <p className="text-sm text-dark-100 mb-6 max-w-md mx-auto">
-            HeyGen requires you to verify your identity. Click below to complete the consent process.
-            This ensures only you can create an avatar of yourself.
+        <Card padding="lg" className="text-center">
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center mb-5">
+            <span className="text-3xl">📋</span>
+          </div>
+          <CardTitle className="text-center">Consent Verification Required</CardTitle>
+          <p className="text-sm text-dark-100 mt-2 max-w-md mx-auto">
+            HeyGen requires identity verification to ensure only you can create an avatar of yourself. 
+            Complete the quick consent process to proceed.
           </p>
-          
-          {consentUrl ? (
-            <a
-              href={consentUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn-primary inline-flex items-center gap-2"
-            >
-              Complete Consent ↗
-            </a>
-          ) : (
-            <p className="text-sm text-dark-200">Loading consent URL...</p>
-          )}
 
-          <p className="text-xs text-dark-300 mt-6">
-            We'll automatically detect when consent is approved and start training.
-          </p>
-        </div>
+          <div className="mt-8">
+            {consentUrl ? (
+              <a
+                href={consentUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Button size="lg" icon={<span>↗</span>}>
+                  Complete Consent Verification
+                </Button>
+              </a>
+            ) : (
+              <div className="flex items-center justify-center gap-2 text-dark-200">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span className="text-sm">Loading consent URL...</span>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-8 p-4 rounded-xl bg-dark-600/30 border border-dark-400/10 max-w-sm mx-auto">
+            <p className="text-[11px] text-dark-300 leading-relaxed">
+              We'll automatically detect when consent is approved and start training your avatar. 
+              You can close this page and come back — we'll update the status.
+            </p>
+          </div>
+
+          <div className="mt-4">
+            <StatusBadge status="CONSENT_PENDING" />
+          </div>
+        </Card>
       )}
 
-      {/* Step: Training */}
+      {/* ═══ STEP: Training ═══ */}
       {step === 'training' && (
-        <div className="glass-card p-8 text-center">
-          <div className="text-5xl mb-4 animate-pulse-slow">🧬</div>
-          <h2 className="text-lg font-semibold text-white mb-2">
-            Training Your Avatar
-          </h2>
-          <p className="text-sm text-dark-100 mb-4">
-            This usually takes 10-30 minutes. You can leave this page and come back.
-          </p>
-          <div className="progress-bar max-w-xs mx-auto">
-            <div className="progress-bar-fill animate-pulse" style={{ width: '60%' }} />
+        <Card padding="lg" className="text-center">
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mb-5">
+            <span className="text-3xl animate-pulse-slow">🧬</span>
           </div>
-          <p className="text-xs text-dark-300 mt-4">
-            We'll notify you when your avatar is ready.
+          <CardTitle className="text-center">Training Your Digital Twin</CardTitle>
+          <p className="text-sm text-dark-100 mt-2 max-w-md mx-auto">
+            This usually takes 10–30 minutes. You can safely leave this page.
           </p>
-        </div>
+
+          {/* Animated progress */}
+          <div className="mt-8 max-w-xs mx-auto">
+            <div className="h-2 bg-dark-600 rounded-full overflow-hidden">
+              <div className="h-full bg-gradient-to-r from-brand-600 to-brand-400 rounded-full animate-pulse w-3/4" />
+            </div>
+            <p className="text-[11px] text-dark-300 mt-2">Processing... this may take a while</p>
+          </div>
+
+          <div className="mt-8 flex items-center justify-center gap-2">
+            <StatusBadge status="TRAINING" />
+          </div>
+
+          <div className="mt-6">
+            <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard')}>
+              ← Back to Dashboard (we'll notify you)
+            </Button>
+          </div>
+        </Card>
       )}
 
-      {/* Step: Ready */}
+      {/* ═══ STEP: Ready ═══ */}
       {step === 'ready' && (
-        <div className="glass-card p-8 text-center">
-          <div className="text-5xl mb-4">🎉</div>
-          <h2 className="text-lg font-semibold text-white mb-2">
-            Avatar Ready!
-          </h2>
-          <p className="text-sm text-dark-100 mb-6">
-            Your digital twin "{avatarName}" is ready to create videos.
-          </p>
-          <div className="flex gap-3 justify-center">
-            <button
-              onClick={() => router.push('/create-video')}
-              className="btn-primary"
-            >
-              Create a Video →
-            </button>
-            <button
-              onClick={() => router.push('/dashboard')}
-              className="btn-secondary"
-            >
-              Back to Dashboard
-            </button>
+        <Card padding="lg" className="text-center">
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-green-500/10 border border-green-500/20 flex items-center justify-center mb-5">
+            <span className="text-3xl">🎉</span>
           </div>
-        </div>
+          <CardTitle className="text-center">Your Digital Twin is Ready!</CardTitle>
+          <p className="text-sm text-dark-100 mt-2 max-w-md mx-auto">
+            <span className="text-white font-medium">"{avatarName}"</span> has been successfully trained. 
+            You can now use it to generate videos.
+          </p>
+
+          <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
+            <Button onClick={() => router.push('/create-video')} size="lg">
+              Create a Video →
+            </Button>
+            <Button variant="secondary" onClick={() => router.push('/clone-voice')}>
+              Clone Voice First
+            </Button>
+          </div>
+
+          <div className="mt-6">
+            <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard')}>
+              Back to Dashboard
+            </Button>
+          </div>
+        </Card>
       )}
     </div>
   );

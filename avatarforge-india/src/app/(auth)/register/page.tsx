@@ -2,47 +2,75 @@
 
 import { useState } from 'react';
 import { signIn } from 'next-auth/react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/Button';
 
-export default function LoginPage() {
+export default function RegisterPage() {
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState('');
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get('callbackUrl') || '/dashboard';
 
-  const handleCredentialsLogin = async (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) {
-      setError('Please enter email and password');
-      return;
-    }
-    setLoading(true);
     setError('');
 
-    const result = await signIn('credentials', {
-      email,
-      password,
-      redirect: false,
-      callbackUrl,
-    });
-
-    if (result?.error) {
-      setError('Invalid email or password. Please try again.');
-    } else if (result?.url) {
-      router.push(result.url);
+    if (!name || !email || !password) {
+      setError('All fields are required');
+      return;
     }
-    setLoading(false);
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      // Register user via API
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Registration failed');
+      }
+
+      // Auto sign in after registration
+      const result = await signIn('credentials', {
+        email,
+        password,
+        redirect: false,
+      });
+
+      if (result?.error) {
+        throw new Error('Account created but auto-login failed. Please sign in manually.');
+      }
+
+      router.push('/dashboard');
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleGoogleLogin = () => {
+  const handleGoogleRegister = () => {
     setGoogleLoading(true);
-    signIn('google', { callbackUrl });
+    signIn('google', { callbackUrl: '/dashboard' });
   };
 
   return (
@@ -62,37 +90,33 @@ export default function LoginPage() {
           </Link>
 
           <h2 className="text-3xl font-bold text-white leading-tight mb-4">
-            Your AI Digital Twin,<br />
-            <span className="text-brand-400">ready in minutes.</span>
+            Join thousands of<br />
+            <span className="text-brand-400">Indian creators.</span>
           </h2>
           <p className="text-dark-100 text-sm leading-relaxed max-w-md">
-            Create studio-quality videos with your AI avatar. Perfect for reels, 
-            courses, and business content — in Hindi, English, or Hinglish.
+            Set up your account in seconds. Start with 60 free seconds of AI video generation.
+            No credit card needed.
           </p>
 
-          {/* Stats */}
-          <div className="flex gap-8 mt-10">
-            <div>
-              <p className="text-2xl font-bold text-white">60s</p>
-              <p className="text-xs text-dark-200">Free credits</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-white">₹199</p>
-              <p className="text-xs text-dark-200">Starting price</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-white">3 min</p>
-              <p className="text-xs text-dark-200">Avg. generation</p>
-            </div>
-          </div>
+          {/* Benefits */}
+          <ul className="mt-8 space-y-3">
+            {[
+              'Free 60-second trial — no card required',
+              'Create your Digital Twin in 10 minutes',
+              'Generate videos in Hindi, English, or Hinglish',
+              'Plans starting at just ₹199/month',
+            ].map((item, i) => (
+              <li key={i} className="flex items-center gap-2.5 text-sm text-dark-100">
+                <span className="w-5 h-5 rounded-full bg-green-500/10 border border-green-500/30 flex items-center justify-center text-green-400 text-[10px]">✓</span>
+                {item}
+              </li>
+            ))}
+          </ul>
         </div>
-
-        {/* Decorative elements */}
-        <div className="absolute bottom-0 right-0 w-64 h-64 bg-brand-500/5 rounded-full blur-3xl" />
-        <div className="absolute top-1/4 right-10 w-32 h-32 bg-brand-600/10 rounded-full blur-2xl" />
+        <div className="absolute bottom-10 right-10 w-48 h-48 bg-brand-500/5 rounded-full blur-3xl" />
       </div>
 
-      {/* Right side — Login Form */}
+      {/* Right side — Register Form */}
       <div className="flex-1 flex items-center justify-center px-4 sm:px-8">
         <div className="w-full max-w-sm">
           {/* Mobile logo */}
@@ -106,16 +130,16 @@ export default function LoginPage() {
           </div>
 
           <div className="mb-8">
-            <h2 className="text-2xl font-bold text-white">Welcome back</h2>
-            <p className="text-sm text-dark-100 mt-1">Sign in to continue creating</p>
+            <h2 className="text-2xl font-bold text-white">Create your account</h2>
+            <p className="text-sm text-dark-100 mt-1">Start creating AI videos in minutes</p>
           </div>
 
-          {/* Google Sign In */}
+          {/* Google Sign Up */}
           <Button
             variant="secondary"
             size="lg"
             className="w-full mb-4"
-            onClick={handleGoogleLogin}
+            onClick={handleGoogleRegister}
             loading={googleLoading}
             icon={
               <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -126,7 +150,7 @@ export default function LoginPage() {
               </svg>
             }
           >
-            Continue with Google
+            Sign up with Google
           </Button>
 
           {/* Divider */}
@@ -135,16 +159,29 @@ export default function LoginPage() {
               <div className="w-full border-t border-dark-400/30" />
             </div>
             <div className="relative flex justify-center">
-              <span className="px-3 bg-dark-900 text-xs text-dark-300">or sign in with email</span>
+              <span className="px-3 bg-dark-900 text-xs text-dark-300">or register with email</span>
             </div>
           </div>
 
-          {/* Email/Password Form */}
-          <form onSubmit={handleCredentialsLogin} className="space-y-4">
+          {/* Registration Form */}
+          <form onSubmit={handleRegister} className="space-y-3.5">
             <div>
-              <label htmlFor="email" className="label">Email</label>
+              <label htmlFor="name" className="label">Full Name</label>
               <input
-                id="email"
+                id="name"
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="input-field"
+                placeholder="Rahul Sharma"
+                autoComplete="name"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="reg-email" className="label">Email</label>
+              <input
+                id="reg-email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -155,15 +192,28 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label htmlFor="password" className="label">Password</label>
+              <label htmlFor="reg-password" className="label">Password</label>
               <input
-                id="password"
+                id="reg-password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="input-field"
-                placeholder="••••••••"
-                autoComplete="current-password"
+                placeholder="Minimum 8 characters"
+                autoComplete="new-password"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="confirm-password" className="label">Confirm Password</label>
+              <input
+                id="confirm-password"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="input-field"
+                placeholder="Re-enter password"
+                autoComplete="new-password"
               />
             </div>
 
@@ -174,22 +224,21 @@ export default function LoginPage() {
             )}
 
             <Button type="submit" size="lg" className="w-full" loading={loading}>
-              Sign In
+              Create Account
             </Button>
           </form>
 
-          {/* Register link */}
+          {/* Login link */}
           <p className="mt-6 text-center text-sm text-dark-200">
-            Don't have an account?{' '}
-            <Link href="/register" className="text-brand-400 hover:text-brand-300 font-medium transition-colors">
-              Create one free
+            Already have an account?{' '}
+            <Link href="/login" className="text-brand-400 hover:text-brand-300 font-medium transition-colors">
+              Sign in
             </Link>
           </p>
 
-          {/* Terms */}
-          <p className="mt-8 text-center text-[11px] text-dark-300 leading-relaxed">
-            By signing in, you agree to our{' '}
-            <a href="#" className="underline hover:text-dark-100">Terms of Service</a>{' '}
+          <p className="mt-6 text-center text-[11px] text-dark-300 leading-relaxed">
+            By creating an account, you agree to our{' '}
+            <a href="#" className="underline hover:text-dark-100">Terms</a>{' '}
             and{' '}
             <a href="#" className="underline hover:text-dark-100">Privacy Policy</a>.
           </p>

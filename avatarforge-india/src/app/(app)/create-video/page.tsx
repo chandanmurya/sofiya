@@ -1,97 +1,118 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
+import { Button } from '@/components/ui/Button';
+import { Card, CardTitle, CardDescription } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { PageSkeleton } from '@/components/ui/Skeleton';
 
+// ─── Script Templates ────────────────────────────────────────
 const TEMPLATES = [
-  { id: 'reel-hi', name: 'Reel Script (Hindi)', category: 'reel', script: 'नमस्ते दोस्तों! आज मैं आपको बताने वाला हूं एक ऐसी चीज़ जो आपकी ज़िंदगी बदल देगी...' },
-  { id: 'reel-en', name: 'Reel Script (English)', category: 'reel', script: 'Hey everyone! Today I want to share something that completely changed how I work...' },
-  { id: 'explainer', name: 'Educational Explainer', category: 'education', script: 'In this video, I will explain the concept of [TOPIC] in simple terms that anyone can understand...' },
-  { id: 'promo', name: 'Promo Ad', category: 'promo', script: 'Introducing [PRODUCT] - the solution you have been waiting for. Here is why thousands of people trust us...' },
-  { id: 'intro', name: 'Channel Intro', category: 'intro', script: 'Welcome to my channel! I am [NAME] and here I share content about [TOPIC]. Make sure to subscribe...' },
+  { id: 'reel-hi', name: 'Reel Script (Hindi)', lang: 'hi', category: 'reel', script: 'नमस्ते दोस्तों! आज मैं आपको बताने वाला हूं एक ऐसी चीज़ जो आपकी ज़िंदगी बदल देगी। अगर आप भी [TOPIC] के बारे में जानना चाहते हैं तो यह वीडियो आपके लिए है। तो चलिए शुरू करते हैं!' },
+  { id: 'reel-en', name: 'Reel Script (English)', lang: 'en', category: 'reel', script: 'Hey everyone! Today I want to share something that completely changed how I approach [TOPIC]. If you are struggling with this, stay till the end because I have a game-changer for you.' },
+  { id: 'explainer', name: 'Educational Explainer', lang: 'en', category: 'education', script: 'In this video, I will explain the concept of [TOPIC] in simple terms that anyone can understand. Whether you are a beginner or have some experience, by the end of this video, you will have a clear understanding.' },
+  { id: 'promo', name: 'Promo Ad', lang: 'en', category: 'promo', script: 'Introducing [PRODUCT] — the solution you have been waiting for. Here is why thousands of people trust us. First, [BENEFIT 1]. Second, [BENEFIT 2]. Try it today!' },
+  { id: 'pitch-hinglish', name: 'Business Pitch (Hinglish)', lang: 'hinglish', category: 'promo', script: 'Hi friends! Main hoon [NAME] aur aaj main aapko batata hoon [PRODUCT] ke baare mein. Agar aap [PROBLEM] se pareshan hain, toh yeh solution aapke liye perfect hai.' },
+  { id: 'course-promo', name: 'Course Promo', lang: 'en', category: 'education', script: 'Want to master [SKILL] in just [TIMEFRAME]? My comprehensive course covers everything from basics to advanced concepts. Join over [NUMBER] students who transformed their careers.' },
 ];
 
 export default function CreateVideoPage() {
   const router = useRouter();
+
+  // ─── Data Loading ──────────────────────────────────────
   const [avatars, setAvatars] = useState<any[]>([]);
   const [voices, setVoices] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [wallet, setWallet] = useState<any>(null);
   const [fetchingData, setFetchingData] = useState(true);
 
-  // Form state
+  // ─── Form State ────────────────────────────────────────
   const [title, setTitle] = useState('');
   const [script, setScript] = useState('');
+  const [scriptLanguage, setScriptLanguage] = useState('en');
   const [avatarId, setAvatarId] = useState('');
   const [voiceId, setVoiceId] = useState('');
   const [aspectRatio, setAspectRatio] = useState('PORTRAIT_9_16');
   const [resolution, setResolution] = useState('HD_720P');
-  const [bgColor, setBgColor] = useState('#000000');
+  const [bgColor, setBgColor] = useState('#0a0a0f');
+  const [bgImageUrl, setBgImageUrl] = useState('');
   const [transparentBg, setTransparentBg] = useState(false);
-  const [scriptLanguage, setScriptLanguage] = useState('en');
+  const [bgMode, setBgMode] = useState<'color' | 'image' | 'transparent'>('color');
 
-  useEffect(() => {
-    fetchUserAssets();
-  }, []);
+  // ─── UI State ──────────────────────────────────────────
+  const [loading, setLoading] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
 
-  async function fetchUserAssets() {
+  useEffect(() => { fetchAssets(); }, []);
+
+  async function fetchAssets() {
     try {
-      const [avatarsRes, voicesRes] = await Promise.all([
-        fetch('/api/avatars'),
-        fetch('/api/voices'),
+      const [aRes, vRes, bRes] = await Promise.all([
+        fetch('/api/avatars'), fetch('/api/voices'), fetch('/api/billing'),
       ]);
-      const [avatarsData, voicesData] = await Promise.all([
-        avatarsRes.json(),
-        voicesRes.json(),
-      ]);
+      const [aData, vData, bData] = await Promise.all([aRes.json(), vRes.json(), bRes.json()]);
 
-      const readyAvatars = (avatarsData.data || []).filter((a: any) => a.status === 'READY');
-      const readyVoices = (voicesData.data || []).filter((v: any) => v.status === 'READY');
+      const readyAvatars = (aData.data || []).filter((a: any) => a.status === 'READY');
+      const readyVoices = (vData.data || []).filter((v: any) => v.status === 'READY');
 
       setAvatars(readyAvatars);
       setVoices(readyVoices);
+      setWallet(bData.data?.wallet || null);
 
       if (readyAvatars.length > 0) setAvatarId(readyAvatars[0].id);
       if (readyVoices.length > 0) setVoiceId(readyVoices[0].id);
     } catch (err) {
-      console.error('Failed to fetch assets:', err);
+      console.error('Fetch assets error:', err);
     } finally {
       setFetchingData(false);
     }
   }
 
+  // ─── Computed Values ───────────────────────────────────
+  const wordCount = useMemo(() => script.split(/\s+/).filter(Boolean).length, [script]);
+  const estDurationSec = useMemo(() => Math.max(1, Math.ceil((wordCount / 150) * 60)), [wordCount]);
+  const estCredits = estDurationSec; // 1 credit = 1 second
+
+  const canSubmit = title.trim() && script.trim().length >= 10 && avatarId && voiceId;
+  const hasEnoughCredits = wallet ? wallet.totalAvailable >= estCredits : false;
+
+  // ─── Submit ────────────────────────────────────────────
   async function handleGenerate() {
-    if (!title || !script || !avatarId || !voiceId) {
+    if (!canSubmit) {
       toast.error('Please fill all required fields');
+      return;
+    }
+    if (!hasEnoughCredits) {
+      toast.error(`Insufficient credits. Need ~${estCredits}s, have ${wallet?.totalAvailable || 0}s`);
       return;
     }
 
     setLoading(true);
-
     try {
       const res = await fetch('/api/videos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title,
-          script,
+          title: title.trim(),
+          script: script.trim(),
+          scriptLanguage,
           avatarId,
           voiceId,
           aspectRatio,
           resolution,
-          scriptLanguage,
-          backgroundColor: transparentBg ? undefined : bgColor,
-          transparentBg,
+          backgroundColor: bgMode === 'color' ? bgColor : undefined,
+          backgroundImageUrl: bgMode === 'image' ? bgImageUrl : undefined,
+          transparentBg: bgMode === 'transparent',
         }),
       });
 
       const data = await res.json();
-
-      if (!data.success) {
+      if (!res.ok || !data.success) {
         throw new Error(data.error || 'Failed to generate video');
       }
 
-      toast.success(`Video queued! ${data.data.creditsDeducted} credits used.`);
+      toast.success(`Video queued! ~${estCredits}s credits used.`);
       router.push('/my-videos');
     } catch (err: any) {
       toast.error(err.message);
@@ -100,62 +121,51 @@ export default function CreateVideoPage() {
     }
   }
 
-  // Estimate word count / duration
-  const wordCount = script.split(/\s+/).filter(Boolean).length;
-  const estDurationSec = Math.ceil((wordCount / 150) * 60);
-  const estDurationMin = (estDurationSec / 60).toFixed(1);
+  // ─── Loading State ─────────────────────────────────────
+  if (fetchingData) return <PageSkeleton />;
 
-  if (fetchingData) {
-    return (
-      <div className="page-container">
-        <div className="animate-pulse space-y-4">
-          <div className="h-8 bg-dark-600 rounded w-48" />
-          <div className="h-64 bg-dark-600 rounded-xl" />
-        </div>
-      </div>
-    );
-  }
-
-  // Check if user has assets
+  // ─── No Assets State ───────────────────────────────────
   if (avatars.length === 0 || voices.length === 0) {
     return (
       <div className="page-container max-w-2xl mx-auto">
         <h1 className="page-title">Create Video</h1>
-        <div className="glass-card p-8 text-center mt-8">
-          <div className="text-5xl mb-4">⚠️</div>
-          <h2 className="text-lg font-semibold text-white mb-2">Setup Required</h2>
-          <p className="text-sm text-dark-100 mb-6">
-            You need at least one ready avatar and one ready voice clone to create videos.
-          </p>
-          <div className="flex gap-3 justify-center">
-            {avatars.length === 0 && (
-              <button onClick={() => router.push('/create-avatar')} className="btn-primary">
-                Create Avatar
-              </button>
-            )}
-            {voices.length === 0 && (
-              <button onClick={() => router.push('/clone-voice')} className="btn-secondary">
-                Clone Voice
-              </button>
-            )}
-          </div>
-        </div>
+        <Card padding="lg" className="mt-6">
+          <EmptyState
+            icon="⚠️"
+            title="Setup Required"
+            description={
+              avatars.length === 0 && voices.length === 0
+                ? 'You need at least one ready avatar AND one ready voice clone.'
+                : avatars.length === 0
+                ? 'You need at least one ready avatar to create videos.'
+                : 'You need at least one ready voice clone to create videos.'
+            }
+            action={{
+              label: avatars.length === 0 ? 'Create Avatar' : 'Clone Voice',
+              onClick: () => router.push(avatars.length === 0 ? '/create-avatar' : '/clone-voice'),
+            }}
+          />
+        </Card>
       </div>
     );
   }
 
   return (
-    <div className="page-container max-w-4xl mx-auto">
-      <h1 className="page-title">Create Video</h1>
-      <p className="page-subtitle">Generate a professional video with your AI avatar.</p>
+    <div className="page-container max-w-5xl mx-auto">
+      <div className="mb-6">
+        <h1 className="page-title">Create Video</h1>
+        <p className="page-subtitle">Generate a professional video with your AI avatar and cloned voice.</p>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Form */}
-        <div className="lg:col-span-2 space-y-6">
+        {/* ═══ Main Form (Left 2/3) ═══ */}
+        <div className="lg:col-span-2 space-y-5">
+
           {/* Title */}
-          <div className="glass-card p-6">
-            <label className="label">Video Title</label>
+          <Card>
+            <label htmlFor="video-title" className="label">Video Title</label>
             <input
+              id="video-title"
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -163,187 +173,259 @@ export default function CreateVideoPage() {
               placeholder="My awesome video"
               maxLength={100}
             />
-          </div>
+          </Card>
 
-          {/* Script */}
-          <div className="glass-card p-6">
+          {/* Script Editor */}
+          <Card>
             <div className="flex items-center justify-between mb-2">
               <label className="label mb-0">Script</label>
-              <select
-                value={scriptLanguage}
-                onChange={(e) => setScriptLanguage(e.target.value)}
-                className="text-xs bg-dark-600 border border-dark-400/50 rounded px-2 py-1 text-dark-100"
-              >
-                <option value="en">English</option>
-                <option value="hi">Hindi</option>
-                <option value="hinglish">Hinglish</option>
-              </select>
+              <div className="flex items-center gap-2">
+                <select
+                  value={scriptLanguage}
+                  onChange={(e) => setScriptLanguage(e.target.value)}
+                  className="text-xs bg-dark-600 border border-dark-400/30 rounded-lg px-2.5 py-1.5 text-dark-100 focus:outline-none focus:ring-1 focus:ring-brand-500/50"
+                >
+                  <option value="en">English</option>
+                  <option value="hi">Hindi</option>
+                  <option value="hinglish">Hinglish</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setShowTemplates(!showTemplates)}
+                  className="text-xs text-brand-400 hover:text-brand-300 transition-colors px-2 py-1"
+                >
+                  {showTemplates ? 'Hide Templates' : '📝 Templates'}
+                </button>
+              </div>
             </div>
+
             <textarea
               value={script}
               onChange={(e) => setScript(e.target.value)}
-              className="input-field min-h-[200px] resize-y"
-              placeholder="Type or paste your script here..."
+              className="input-field min-h-[180px] resize-y font-mono text-sm leading-relaxed"
+              placeholder="Type or paste your script here...&#10;&#10;Tip: Write naturally as if you're speaking to camera."
               maxLength={5000}
             />
-            <div className="flex justify-between mt-2 text-xs text-dark-200">
-              <span>{wordCount} words • ~{estDurationMin} min</span>
-              <span>{script.length}/5000 chars</span>
+
+            <div className="flex justify-between mt-2 text-[11px] text-dark-300">
+              <span>{wordCount} words • ~{estDurationSec}s estimated</span>
+              <span>{script.length}/5000</span>
             </div>
 
-            {/* Templates */}
-            <details className="mt-3">
-              <summary className="text-xs text-brand-400 cursor-pointer hover:text-brand-300">
-                Use a template
-              </summary>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {TEMPLATES.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => setScript(t.script)}
-                    className="text-left p-2 bg-dark-600/50 rounded-lg text-xs hover:bg-dark-500/50 transition-colors"
-                  >
-                    <span className="font-medium text-white">{t.name}</span>
-                  </button>
-                ))}
+            {/* Templates Drawer */}
+            {showTemplates && (
+              <div className="mt-4 p-4 rounded-xl bg-dark-600/30 border border-dark-400/10">
+                <p className="text-xs text-dark-100 mb-3 font-medium">Choose a template to get started:</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {TEMPLATES.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => { setScript(t.script); setScriptLanguage(t.lang); setShowTemplates(false); }}
+                      className="text-left p-3 rounded-lg bg-dark-700/50 border border-dark-400/10 hover:border-brand-500/30 hover:bg-dark-600/50 transition-all"
+                    >
+                      <p className="text-xs font-medium text-white">{t.name}</p>
+                      <p className="text-[10px] text-dark-300 mt-0.5 capitalize">{t.category} • {t.lang}</p>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </details>
-          </div>
+            )}
+          </Card>
 
           {/* Avatar & Voice Selection */}
-          <div className="glass-card p-6 grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Avatar</label>
-              <select
-                value={avatarId}
-                onChange={(e) => setAvatarId(e.target.value)}
-                className="input-field"
-              >
-                {avatars.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
-              </select>
+          <Card>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Avatar</label>
+                <select
+                  value={avatarId}
+                  onChange={(e) => setAvatarId(e.target.value)}
+                  className="input-field"
+                >
+                  {avatars.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Voice</label>
+                <select
+                  value={voiceId}
+                  onChange={(e) => setVoiceId(e.target.value)}
+                  className="input-field"
+                >
+                  {voices.map((v) => (
+                    <option key={v.id} value={v.id}>{v.name} ({v.language})</option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <div>
-              <label className="label">Voice</label>
-              <select
-                value={voiceId}
-                onChange={(e) => setVoiceId(e.target.value)}
-                className="input-field"
-              >
-                {voices.map((v) => (
-                  <option key={v.id} value={v.id}>{v.name} ({v.language})</option>
-                ))}
-              </select>
-            </div>
-          </div>
+          </Card>
         </div>
 
-        {/* Sidebar - Settings */}
-        <div className="space-y-6">
-          {/* Video Settings */}
-          <div className="glass-card p-6 space-y-4">
-            <h3 className="text-sm font-semibold text-white">Video Settings</h3>
+        {/* ═══ Sidebar (Right 1/3) ═══ */}
+        <div className="space-y-5">
 
-            <div>
-              <label className="label">Aspect Ratio</label>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { value: 'PORTRAIT_9_16', label: '9:16', desc: 'Reels' },
-                  { value: 'LANDSCAPE_16_9', label: '16:9', desc: 'YouTube' },
-                ].map((opt) => (
+          {/* Aspect Ratio */}
+          <Card>
+            <CardTitle className="text-sm">Format</CardTitle>
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              {[
+                { value: 'PORTRAIT_9_16', label: '9:16', desc: 'Reels / Shorts', icon: '📱' },
+                { value: 'LANDSCAPE_16_9', label: '16:9', desc: 'YouTube / Web', icon: '🖥️' },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setAspectRatio(opt.value)}
+                  className={`p-3 rounded-xl border text-center transition-all ${
+                    aspectRatio === opt.value
+                      ? 'border-brand-500/60 bg-brand-500/10'
+                      : 'border-dark-400/20 hover:border-dark-400/40'
+                  }`}
+                >
+                  <span className="text-lg">{opt.icon}</span>
+                  <p className={`text-xs font-medium mt-1 ${aspectRatio === opt.value ? 'text-brand-400' : 'text-white'}`}>
+                    {opt.label}
+                  </p>
+                  <p className="text-[10px] text-dark-300">{opt.desc}</p>
+                </button>
+              ))}
+            </div>
+          </Card>
+
+          {/* Resolution */}
+          <Card>
+            <CardTitle className="text-sm">Resolution</CardTitle>
+            <select
+              value={resolution}
+              onChange={(e) => setResolution(e.target.value)}
+              className="input-field mt-2"
+            >
+              <option value="SD_480P">480p (SD) — fastest</option>
+              <option value="HD_720P">720p (HD) — recommended</option>
+              <option value="FHD_1080P">1080p (Full HD)</option>
+            </select>
+          </Card>
+
+          {/* Background */}
+          <Card>
+            <CardTitle className="text-sm">Background</CardTitle>
+            <div className="mt-3 space-y-3">
+              {/* Mode selector */}
+              <div className="flex rounded-lg overflow-hidden border border-dark-400/20">
+                {([
+                  { value: 'color', label: 'Color' },
+                  { value: 'image', label: 'Image' },
+                  { value: 'transparent', label: 'None' },
+                ] as const).map((opt) => (
                   <button
                     key={opt.value}
-                    onClick={() => setAspectRatio(opt.value)}
-                    className={`p-2 rounded-lg text-xs border transition-all ${
-                      aspectRatio === opt.value
-                        ? 'border-brand-500 bg-brand-500/10 text-brand-400'
-                        : 'border-dark-400/50 text-dark-200 hover:border-dark-300'
+                    type="button"
+                    onClick={() => setBgMode(opt.value)}
+                    className={`flex-1 py-2 text-xs font-medium transition-colors ${
+                      bgMode === opt.value
+                        ? 'bg-brand-500/20 text-brand-400'
+                        : 'text-dark-200 hover:text-white hover:bg-dark-600/50'
                     }`}
                   >
-                    <div className="font-medium">{opt.label}</div>
-                    <div className="text-[10px] opacity-70">{opt.desc}</div>
+                    {opt.label}
                   </button>
                 ))}
               </div>
-            </div>
 
-            <div>
-              <label className="label">Resolution</label>
-              <select
-                value={resolution}
-                onChange={(e) => setResolution(e.target.value)}
-                className="input-field"
-              >
-                <option value="SD_480P">480p (SD)</option>
-                <option value="HD_720P">720p (HD)</option>
-                <option value="FHD_1080P">1080p (Full HD)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="label">Background</label>
-              <div className="flex items-center gap-2 mb-2">
-                <input
-                  type="checkbox"
-                  checked={transparentBg}
-                  onChange={(e) => setTransparentBg(e.target.checked)}
-                  className="rounded"
-                />
-                <span className="text-xs text-dark-100">Transparent (WEBM)</span>
-              </div>
-              {!transparentBg && (
-                <div className="flex items-center gap-2">
+              {bgMode === 'color' && (
+                <div className="flex items-center gap-3">
                   <input
                     type="color"
                     value={bgColor}
                     onChange={(e) => setBgColor(e.target.value)}
-                    className="w-8 h-8 rounded cursor-pointer"
+                    className="w-10 h-10 rounded-lg cursor-pointer border border-dark-400/30"
                   />
-                  <span className="text-xs text-dark-200">{bgColor}</span>
+                  <div>
+                    <p className="text-xs text-white font-mono">{bgColor}</p>
+                    <p className="text-[10px] text-dark-300">Click to change</p>
+                  </div>
+                </div>
+              )}
+
+              {bgMode === 'image' && (
+                <div>
+                  <input
+                    type="url"
+                    value={bgImageUrl}
+                    onChange={(e) => setBgImageUrl(e.target.value)}
+                    className="input-field text-xs"
+                    placeholder="https://example.com/background.jpg"
+                  />
+                  <p className="text-[10px] text-dark-300 mt-1">Paste a public image URL</p>
+                </div>
+              )}
+
+              {bgMode === 'transparent' && (
+                <div className="p-3 rounded-lg bg-dark-600/30 border border-dark-400/10">
+                  <p className="text-[11px] text-dark-200">
+                    Output will be WEBM format with transparent background. 
+                    Great for overlays and compositing.
+                  </p>
                 </div>
               )}
             </div>
-          </div>
+          </Card>
 
           {/* Cost Estimate */}
-          <div className="glass-card p-6">
-            <h3 className="text-sm font-semibold text-white mb-3">Cost Estimate</h3>
-            <div className="space-y-2 text-xs">
-              <div className="flex justify-between text-dark-200">
-                <span>Duration</span>
-                <span>~{estDurationMin} min</span>
+          <Card glow>
+            <CardTitle className="text-sm">Cost Estimate</CardTitle>
+            <div className="mt-3 space-y-2">
+              <div className="flex justify-between text-xs text-dark-200">
+                <span>Est. Duration</span>
+                <span className="text-white">~{estDurationSec}s</span>
               </div>
-              <div className="flex justify-between text-dark-200">
-                <span>Resolution</span>
-                <span>{resolution.replace('_', ' ')}</span>
+              <div className="flex justify-between text-xs text-dark-200">
+                <span>Credits Required</span>
+                <span className="text-white">~{estCredits}s</span>
               </div>
-              <div className="flex justify-between text-dark-200">
-                <span>Transparent</span>
-                <span>{transparentBg ? 'Yes (+20%)' : 'No'}</span>
+              <div className="flex justify-between text-xs text-dark-200">
+                <span>Available</span>
+                <span className={hasEnoughCredits ? 'text-green-400' : 'text-red-400'}>
+                  {wallet?.totalAvailable || 0}s
+                </span>
               </div>
-              <hr className="border-dark-400/30" />
-              <div className="flex justify-between text-white font-medium">
-                <span>Estimated Credits</span>
-                <span className="text-brand-400">
-                  ~{Math.ceil(
-                    (estDurationSec / 60) *
-                    (resolution === 'FHD_1080P' ? 25 : resolution === 'HD_720P' ? 15 : 10) *
-                    (transparentBg ? 1.2 : 1)
-                  )} credits
+              <hr className="border-dark-400/20 my-2" />
+              <div className="flex justify-between text-xs">
+                <span className="text-dark-100 font-medium">After generation</span>
+                <span className={`font-bold ${hasEnoughCredits ? 'text-brand-400' : 'text-red-400'}`}>
+                  {hasEnoughCredits ? `${(wallet?.totalAvailable || 0) - estCredits}s remaining` : 'Insufficient!'}
                 </span>
               </div>
             </div>
-          </div>
+
+            {!hasEnoughCredits && (
+              <div className="mt-3 p-2.5 rounded-lg bg-red-500/10 border border-red-500/15">
+                <p className="text-[11px] text-red-300">
+                  Not enough credits.{' '}
+                  <a href="/billing" className="underline hover:text-red-200">Buy a top-up</a> or shorten your script.
+                </p>
+              </div>
+            )}
+          </Card>
 
           {/* Generate Button */}
-          <button
+          <Button
+            size="lg"
+            className="w-full"
             onClick={handleGenerate}
-            disabled={loading || !title || !script || !avatarId || !voiceId}
-            className="btn-primary w-full text-center"
+            loading={loading}
+            disabled={!canSubmit || !hasEnoughCredits}
+            icon={<span>🎬</span>}
           >
-            {loading ? 'Generating...' : '🎬 Generate Video'}
-          </button>
+            Generate Video
+          </Button>
+
+          <p className="text-center text-[10px] text-dark-400">
+            Generation takes 2–5 minutes. You'll be notified when ready.
+          </p>
         </div>
       </div>
     </div>
