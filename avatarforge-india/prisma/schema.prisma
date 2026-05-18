@@ -67,8 +67,19 @@ model User {
   phone         String?
   role          UserRole  @default(USER)
   locale        String    @default("en")
+  accountType   AccountType @default(FREE_DEMO)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+  // ─── Free Demo Fields ──────────────────────────────────
+  freeDemoUsed           Boolean  @default(false)  // has user consumed any free credits?
+  freeCreditsRemaining   Int      @default(15)     // lifetime free seconds (never resets)
+  onboardingCompleted    Boolean  @default(false)  // completed demo onboarding wizard?
+  abuseScore             Int      @default(0)      // 0=clean, higher=suspicious
+  deviceHash             String?                   // browser fingerprint hash
+  lastGenerationIp       String?                   // IP of last generation request
+  adminFlagged           Boolean  @default(false)  // manually flagged by admin
+  flagReason             String?                   // reason for admin flag
 
   // Relations
   accounts      Account[]
@@ -84,6 +95,13 @@ model User {
   topups        TopupPurchase[]
 
   @@index([email])
+  @@index([accountType])
+  @@index([abuseScore])
+}
+
+enum AccountType {
+  FREE_DEMO  // free tier, 15s lifetime, watermark, stock avatars only
+  SUBSCRIBED // active paid subscription
 }
 
 enum UserRole {
